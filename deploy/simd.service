@@ -1,0 +1,29 @@
+[Unit]
+Description=SIM SMS management daemon
+After=network.target
+
+[Service]
+Type=simple
+User=simd
+Group=simd
+SupplementaryGroups=dialout
+EnvironmentFile=/etc/simd/simd.env
+WorkingDirectory=/var/lib/simd
+ExecStart=/usr/local/bin/simd -config /etc/simd/config.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+StateDirectory=simd
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/simd
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,30 @@
+name: Go checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Test on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go vet ./...
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: make release
+      - name: Native Linux release-binary smoke test
+        run: |
+          arch="$(go env GOARCH)"
+          python3 scripts/smoke_test.py --binary "bin/simd-linux-${arch}"

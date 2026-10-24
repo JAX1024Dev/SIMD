@@ -1,0 +1,34 @@
+# Secrets are read from environment variables. Never put credentials in this file.
+listen: 127.0.0.1:8080
+token_env: SIMD_API_TOKEN
+database: ./data/simd.db
+scan_interval: 60s
+status_interval: 30s
+assembly_wait: 5m
+send_ttl: 5m
+forward_ttl: 24h
+bark_timeout: 10s
+retention_days: 90
+
+devices:
+  - id: sim-01
+    name: Main Modem
+    sim_label: Personal SIM
+    # phone: "+8613800000000" # Optional manually maintained number.
+    driver: ml307r
+    port: /dev/ttyS0
+    baud: 115200
+    rts_cts: false # Enable only when both RTS and CTS are physically wired.
+    enabled: true
+    bark_targets: [iphone]
+  # - id: sim-02
+  #   name: Backup Modem
+  #   sim_label: Backup SIM
+  #   port: /dev/ttyS1
+  #   bark_targets: [iphone]
+
+bark_targets:
+  - id: iphone
+    url: https://api.day.app # Base URL; the daemon appends /push.
+    key_env: SIMD_BARK_IPHONE_KEY
+    path_mode: push # Use key for servers exposing POST /{device_key} instead.

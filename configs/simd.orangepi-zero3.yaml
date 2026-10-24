@@ -1,0 +1,31 @@
+# Orange Pi Zero 3 / Debian, Ubuntu or Armbian (64-bit, systemd).
+listen: 127.0.0.1:8080
+token_env: SIMD_API_TOKEN
+database: /var/lib/simd/data/simd.db
+scan_interval: 60s
+status_interval: 30s
+assembly_wait: 5m
+send_ttl: 5m
+forward_ttl: 24h
+bark_timeout: 10s
+retention_days: 90
+
+devices:
+  - id: sim-01
+    name: Orange Pi Modem
+    sim_label: SIM 1
+    driver: ml307r
+    # Example only: replace with the UART enabled by your OS image, or a stable
+    # /dev/serial/by-id/... path for a USB-to-UART adapter.
+    port: /dev/ttyS5
+    baud: 115200
+    rts_cts: false
+    enabled: true
+    bark_targets: [iphone]
+
+bark_targets:
+  - id: iphone
+    url: https://api.day.app
+    key_env: SIMD_BARK_IPHONE_KEY
+    # Set key for a self-hosted server that exposes POST /{device_key}.
+    path_mode: push

@@ -1,0 +1,382 @@
+openapi: 3.0.3
+info:
+  title: SIMD SMS Management API
+  version: 1.0.0
+  description: Internal single-administrator SMS service. All timestamps use RFC3339. Submission and Bark success do not imply recipient delivery.
+servers:
+  - url: http://127.0.0.1:8080
+security:
+  - bearerAuth: []
+paths:
+  /health/live:
+    get:
+      security: []
+      summary: Cached process and core-worker liveness
+      responses:
+        '200':
+          description: Live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [live]
+                properties:
+                  live: {type: boolean}
+        '503': {description: Core worker heartbeat missing or stale}
+  /health/ready:
+    get:
+      security: []
+      summary: Cached writable storage, healthy core workers and at least one ready modem
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ready]
+                properties:
+                  ready: {type: boolean}
+        '503': {description: Not ready; body contains ready false only}
+  /api/v1/health:
+    get:
+      summary: Detailed cached health; performs no live AT or Bark request
+      responses:
+        '200':
+          description: Current health, including degraded or unhealthy status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, enum: [healthy, degraded, unhealthy]}
+                  live: {type: boolean}
+                  ready: {type: boolean}
+                  database_writable: {type: boolean}
+                  database_checked_at: {type: string, format: date-time}
+                  checked_at: {type: string, format: date-time}
+                  worker_heartbeats:
+                    type: object
+                    additionalProperties: {type: string, format: date-time}
+                  forward_tasks:
+                    type: object
+                    description: Counts by task state. retrying counts pending tasks with an earlier attempt; unresolved counts failed or expired tasks without a manual successor. Historical failures with a successor do not keep health degraded.
+                    additionalProperties: {type: integer}
+                  devices:
+                    type: array
+                    items: {$ref: '#/components/schemas/Device'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/devices:
+    get:
+      summary: Configured devices, including disabled and unavailable ones
+      responses:
+        '200':
+          description: Device list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Device'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/devices/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: Device status and current SIM identity
+      responses:
+        '200':
+          description: Device
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Device'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/messages:
+    get:
+      summary: List received and sent messages by descending stable ID
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+        - name: device_id
+          in: query
+          schema: {type: string}
+        - name: iccid
+          in: query
+          schema: {type: string}
+        - name: direction
+          in: query
+          schema: {type: string, enum: [inbound, outbound]}
+        - name: number
+          in: query
+          description: Exact sender or recipient as stored; URL-encode leading plus.
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: from
+          in: query
+          description: Inclusive platform creation time lower bound
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          description: Inclusive platform creation time upper bound
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Message page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Message'}
+                  next_cursor: {type: string, description: Empty when there is no next page}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    post:
+      summary: Queue a single-part SMS; never automatically retry failed or unknown submissions
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: 1-128 bytes, no surrounding whitespace. Retained with the message. Same key and parameters return the original task even if the device is now offline.
+          schema: {type: string, minLength: 1, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [device_id, number, body]
+              properties:
+                device_id: {type: string}
+                number: {type: string, pattern: '^\+?[0-9]{1,20}$'}
+                body: {type: string, minLength: 1, description: GSM7 <=160 septets or UCS2 <=70 code units; extended GSM characters count twice. Emoji and multi-part sending are rejected.}
+      responses:
+        '202':
+          description: Accepted or idempotent replay
+          headers:
+            Location:
+              description: Message detail URL
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message_id, status, created]
+                properties:
+                  message_id: {type: integer, format: int64}
+                  status: {type: string}
+                  created: {type: boolean}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Idempotency key has different parameters
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '415': {description: Content-Type must be application/json}
+        '422':
+          description: invalid_message, message_too_long or unsupported_character
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/messages/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/RecordID'}
+    get:
+      summary: Message body, original PDUs and recent forwarding tasks
+      responses:
+        '200':
+          description: Message with up to 200 most recent forwarding tasks; use forward-tasks pagination for more.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {$ref: '#/components/schemas/Message'}
+                  forward_tasks:
+                    type: array
+                    items: {$ref: '#/components/schemas/ForwardTask'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/forward-tasks:
+    get:
+      summary: Forwarding history by target and segment
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+        - name: message_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, running, succeeded, failed, expired]}
+        - name: target_id
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Task page; no credentials or notification body in task objects. Native Bark presentation is persisted internally, including the minimal sender/timestamp subtitle, unified icon and an invisible stable notification ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/ForwardTask'}
+                  next_cursor: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/forward-tasks/{id}/retry:
+    parameters:
+      - {$ref: '#/components/parameters/RecordID'}
+    post:
+      summary: Create a new task linked to a failed or expired task
+      responses:
+        '202':
+          description: New task queued with a fresh retry window; original history is preserved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: {type: integer, format: int64}
+                  parent_id: {type: integer, format: int64}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Original task is not failed or expired
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  parameters:
+    RecordID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    Cursor:
+      name: cursor
+      in: query
+      description: Use next_cursor from the previous page. Returns IDs lower than this exclusive bound.
+      schema: {type: string, pattern: '^[1-9][0-9]*$'}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+  responses:
+    BadRequest:
+      description: Invalid request, record identifier or query parameters
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Missing or invalid Bearer Token
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unavailable:
+      description: Storage, worker, device or SIM unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            request_id: {type: string}
+    Device:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        sim_label: {type: string}
+        phone: {type: string}
+        enabled: {type: boolean}
+        state: {type: string, enum: [disabled, connecting, offline, unsupported, sim_missing, pin_required, unregistered, ready]}
+        model: {type: string}
+        firmware: {type: string}
+        imei: {type: string}
+        iccid: {type: string}
+        sim_state: {type: string}
+        operator: {type: string}
+        registration: {type: integer}
+        signal: {type: integer, description: Raw CSQ RSSI, 99 means unknown}
+        storage_used: {type: integer}
+        storage_total: {type: integer}
+        storage: {type: string}
+        capabilities:
+          type: object
+          properties:
+            sms: {type: boolean}
+            pdu: {type: boolean}
+            long_receive: {type: string, description: unverified until real firmware concatenated SMS behavior has been verified}
+        last_error: {type: string}
+        checked_at: {type: string, format: date-time}
+    Message:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        device_id: {type: string}
+        iccid: {type: string}
+        direction: {type: string, enum: [inbound, outbound]}
+        number: {type: string}
+        body: {type: string}
+        status: {type: string, enum: [received, decode_error, assembling, incomplete, queued, sending, submitted, failed, unknown, expired]}
+        error: {type: string}
+        smsc_time: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        historical: {type: boolean}
+        raw_pdus:
+          type: array
+          description: Included on detail responses; original data can contain sensitive content.
+          items: {type: string}
+    ForwardTask:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        message_id: {type: integer, format: int64}
+        target_id: {type: string}
+        parent_id: {type: integer, format: int64}
+        part: {type: integer, minimum: 1}
+        parts: {type: integer, minimum: 1}
+        status: {type: string, enum: [pending, running, succeeded, failed, expired]}
+        attempts: {type: integer}
+        last_error: {type: string}
+        created_at: {type: string, format: date-time}
+        next_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}

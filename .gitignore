@@ -1,0 +1,16 @@
+/bin/
+/dist/
+/ML307R/
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.db.lock
+.env
+.env.*
+*.env
+!deploy/simd.env.example
+configs/simd.yaml
+coverage.out
+.DS_Store
+__pycache__/
